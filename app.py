@@ -19,7 +19,7 @@ groq_client  = Groq(api_key=GROQ_API_KEY)
 app = Flask(__name__)
 
 # ── Secret key MUST be set immediately after app creation ─────
-app.secret_key = "alskdjfwoeieiurlskdjfslkdjf"
+app.secret_key = os.getenv("SECRET_KEY", "alskdjfwoeieiurlskdjfslkdjf")
 
 # ── Database (SQLite — no XAMPP needed) ───────────────────────
 app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///ecom.db"
