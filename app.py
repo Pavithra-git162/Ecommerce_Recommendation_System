@@ -23,7 +23,7 @@ app.secret_key = os.getenv("SECRET_KEY", "alskdjfwoeieiurlskdjfslkdjf")
 
 # ── Database (SQLite — no XAMPP needed) ───────────────────────
 app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///ecom.db"
-app.secret_key = "alskdjfwoeieiurlskdjfslkdjf"
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
