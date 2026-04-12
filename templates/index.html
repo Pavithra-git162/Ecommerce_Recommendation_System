@@ -157,6 +157,7 @@
 <body data-logged-in="{{ 'true' if logged_in else 'false' }}" data-username="{{ username }}">
 
 <!-- Navbar -->
+
 <nav class="navbar navbar-expand-lg navbar-light bg-light">
   <a class="navbar-brand mx-auto" href="#">Ecommerce Recommendation System</a>
   <button class="navbar-toggler" type="button" data-toggle="collapse"
@@ -166,12 +167,11 @@
   </button>
   <div class="collapse navbar-collapse justify-content-end" id="navbarNav">
     <ul class="navbar-nav align-items-center">
-      <li class="nav-item active">
-        <a class="nav-link" href="#"><i class="fas fa-home"></i> Home</a>
-      </li>
+      
       <li class="nav-item">
         <a class="nav-link" href="#" id="settingsLink"><i class="fas fa-cog"></i> Settings</a>
       </li>
+      <a class="nav-link" href="/orders"><i class="fas fa-box-open"></i> My Orders</a>
 
       {% if logged_in %}
         <!-- Show username + logout when logged in -->

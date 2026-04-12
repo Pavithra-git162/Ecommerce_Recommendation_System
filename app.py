@@ -1,14 +1,16 @@
 from flask import Flask, request, render_template, session, redirect, url_for, jsonify
 import pandas as pd
 import numpy as np
-import re
 import random
+import json
+from datetime import datetime
 from flask_sqlalchemy import SQLAlchemy
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from groq import Groq
+from dotenv import load_dotenv
+load_dotenv()
 
-# ── Groq setup ────────────────────────────────────────────────
 import os
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL   = "llama-3.3-70b-versatile"
@@ -24,21 +26,14 @@ train_data['ImageURL'] = train_data['ImageURL'].astype(str).apply(
     lambda x: x.split('|')[0].strip()
 )
 train_data['Rating'] = pd.to_numeric(train_data['Rating'], errors='coerce').fillna(0)
-train_data['Rating'] = train_data['Rating'].apply(
-    lambda x: 0 if x == -2147483648 else x
-)
+train_data['Rating'] = train_data['Rating'].apply(lambda x: 0 if x == -2147483648 else x)
 train_data['ReviewCount'] = pd.to_numeric(train_data['ReviewCount'], errors='coerce').fillna(0)
-train_data['ReviewCount'] = train_data['ReviewCount'].apply(
-    lambda x: 0 if x == -2147483648 else x
-)
+train_data['ReviewCount'] = train_data['ReviewCount'].apply(lambda x: 0 if x == -2147483648 else x)
 
 # ── DB ────────────────────────────────────────────────────────
+app = Flask(__name__)
 app.secret_key = "alskdjfwoeieiurlskdjfslkdjf"
-app.config['SQLALCHEMY_DATABASE_URI'] = "mysql://root:@localhost/ecom?charset=utf8mb4"
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_pre_ping': True,
-    'connect_args': {'charset': 'utf8mb4'}
-}
+app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///ecom.db"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -48,6 +43,25 @@ class Signup(db.Model):
     username = db.Column(db.String(100), nullable=False)
     email    = db.Column(db.String(100), nullable=False)
     password = db.Column(db.String(100), nullable=False)
+
+
+class Order(db.Model):
+    __tablename__ = 'orders'
+    id               = db.Column(db.Integer, primary_key=True)
+    username         = db.Column(db.String(100), nullable=False)
+    order_id         = db.Column(db.String(50),  nullable=False)
+    items            = db.Column(db.Text,         nullable=False)
+    total            = db.Column(db.Float,        nullable=False)
+    payment_method   = db.Column(db.String(100),  nullable=False)
+    delivery_name    = db.Column(db.String(200),  nullable=False)
+    delivery_address = db.Column(db.String(500),  nullable=False)
+    placed_at        = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def items_list(self):
+        try:
+            return json.loads(self.items)
+        except Exception:
+            return []
 
 
 # ── Constants ─────────────────────────────────────────────────
@@ -64,9 +78,7 @@ price = [40, 50, 60, 70, 100, 122, 106, 50, 30, 50]
 def truncate(text, length):
     return text[:length] + "..." if len(text) > length else text
 
-
 def _resolve_image(url_val):
-    """Always returns a usable image URL."""
     url = str(url_val).strip()
     if url.startswith('http://') or url.startswith('https://'):
         return url
@@ -76,9 +88,7 @@ def _resolve_image(url_val):
         return url
     return 'https://placehold.co/300x220/f5a623/ffffff?text=Product'
 
-
 def _df_to_products(df, limit=6):
-    """Convert dataframe rows to product dicts for the chat widget."""
     result = []
     for _, row in df.head(limit).iterrows():
         try:
@@ -95,13 +105,13 @@ def _df_to_products(df, limit=6):
         })
     return result
 
-
 def session_vars():
     cart = session.get('cart', [])
     return {
         'logged_in':  session.get('logged_in', False),
         'username':   session.get('username', ''),
-        'cart_count': sum(i['quantity'] for i in cart)
+        'cart_count': sum(i['quantity'] for i in cart),
+        'cart':       cart,
     }
 
 
@@ -114,22 +124,18 @@ def content_based_recommendations(train_data, item_name, top_n=8):
     ]
     if matches.empty:
         return pd.DataFrame()
-
     matched_name = matches.iloc[0]['Name']
     tfidf_data = train_data.copy()
     tfidf_data['Tags'] = tfidf_data['Tags'].fillna('') + " " + tfidf_data['Name'].fillna('')
-
-    tfidf_vectorizer     = TfidfVectorizer(stop_words='english')
-    tfidf_matrix         = tfidf_vectorizer.fit_transform(tfidf_data['Tags'])
-    cosine_sim           = cosine_similarity(tfidf_matrix, tfidf_matrix)
-
+    tfidf_vectorizer = TfidfVectorizer(stop_words='english')
+    tfidf_matrix     = tfidf_vectorizer.fit_transform(tfidf_data['Tags'])
+    cosine_sim       = cosine_similarity(tfidf_matrix, tfidf_matrix)
     match_mask = tfidf_data['Name'].astype(str).str.lower().str.contains(matched_name.lower(), na=False)
     if not match_mask.any():
         return pd.DataFrame()
-
-    item_pos     = tfidf_data.index.get_loc(tfidf_data[match_mask].index[0])
-    similar      = sorted(enumerate(cosine_sim[item_pos]), key=lambda x: x[1], reverse=True)
-    top_indices  = [x[0] for x in similar[1:top_n + 1]]
+    item_pos    = tfidf_data.index.get_loc(tfidf_data[match_mask].index[0])
+    similar     = sorted(enumerate(cosine_sim[item_pos]), key=lambda x: x[1], reverse=True)
+    top_indices = [x[0] for x in similar[1:top_n + 1]]
     return tfidf_data.iloc[top_indices][['Name', 'ReviewCount', 'Brand', 'ImageURL', 'Rating']]
 
 
@@ -141,23 +147,19 @@ def collaborative_filtering_recommendations(train_data, target_product_name, top
         df['Brand']       = df['Brand'].fillna('Unknown')
         df['Rating']      = pd.to_numeric(df['Rating'], errors='coerce').fillna(0)
         df['ReviewCount'] = pd.to_numeric(df['ReviewCount'], errors='coerce').fillna(0)
-
         cat_col = next((c for c in ['Category','category','ProductType','Type'] if c in df.columns), None)
         matches = df[df['Name'].str.lower().str.contains(target_product_name.lower(), na=False)]
         if matches.empty:
             return pd.DataFrame()
-
         seed_row  = matches.iloc[0]
         seed_name = seed_row['Name']
         seed_cat  = seed_row[cat_col] if cat_col else None
-
         df['combined'] = df['Tags'] + " " + df['Name']
         tfidf_matrix   = TfidfVectorizer(stop_words='english', max_features=8000).fit_transform(df['combined'])
-        seed_mask      = df['Name'].str.lower().str.contains(seed_name.lower(), na=False)
-        seed_loc       = df.index.get_loc(df[seed_mask].index[0])
+        seed_mask  = df['Name'].str.lower().str.contains(seed_name.lower(), na=False)
+        seed_loc   = df.index.get_loc(df[seed_mask].index[0])
         content_scores = cosine_similarity(tfidf_matrix[seed_loc], tfidf_matrix).flatten()
         collab_scores  = np.zeros(len(df))
-
         try:
             cat_df = df[df[cat_col] == seed_cat].copy() if cat_col and seed_cat \
                      else df.sample(min(8000, len(df)), random_state=42).copy()
@@ -175,14 +177,12 @@ def collaborative_filtering_recommendations(train_data, target_product_name, top
                     collab_scores = np.array([name_to_sim.get(n, 0.0) for n in df['Name']])
         except Exception:
             pass
-
         c_max        = collab_scores.max()
-        collab_norm  = collab_scores  / (c_max + 1e-9)
+        collab_norm  = collab_scores / (c_max + 1e-9)
         content_norm = content_scores / (content_scores.max() + 1e-9)
         blended      = (0.60 * collab_norm + 0.40 * content_norm) if c_max > 0.01 \
                        else (0.55 * content_norm + 0.45 * df['Rating'].values / (df['Rating'].max() + 1e-9))
         blended[seed_loc] = -1
-
         seen, final = set(), []
         for idx in np.argsort(blended)[::-1][:top_n * 4]:
             name = df.iloc[idx]['Name']
@@ -190,7 +190,6 @@ def collaborative_filtering_recommendations(train_data, target_product_name, top
                 seen.add(name); final.append(idx)
             if len(final) >= top_n:
                 break
-
         return df.iloc[final][['Name', 'ReviewCount', 'Brand', 'ImageURL', 'Rating']] if final \
                else pd.DataFrame()
     except Exception as e:
@@ -198,236 +197,200 @@ def collaborative_filtering_recommendations(train_data, target_product_name, top
         return pd.DataFrame()
 
 
-# ── Build catalog context for Groq (once at startup) ──────────
+# ── Groq ──────────────────────────────────────────────────────
 def _build_catalog():
     try:
         brands   = train_data['Brand'].dropna().unique().tolist()[:80]
         samples  = train_data['Name'].dropna().sample(min(50, len(train_data)), random_state=1).tolist()
         trending = trending_products['Name'].dropna().tolist()[:10]
-        return (
-            f"Brands: {', '.join(str(b) for b in brands)}.\n"
-            f"Sample products: {', '.join(str(n) for n in samples)}.\n"
-            f"Trending: {', '.join(str(n) for n in trending)}."
-        )
+        return (f"Brands: {', '.join(str(b) for b in brands)}.\n"
+                f"Sample products: {', '.join(str(n) for n in samples)}.\n"
+                f"Trending: {', '.join(str(n) for n in trending)}.")
     except Exception:
         return "Beauty and cosmetics ecommerce store."
 
 CATALOG = _build_catalog()
-
-# ── System prompt ─────────────────────────────────────────────
 SYSTEM_PROMPT = f"""You are ShopBot, a smart shopping assistant for a beauty and cosmetics store.
-
 Rules:
 - Be warm, brief and helpful. Max 2 sentences for your reply text.
-
 - When the user wants products, you MUST output a SEARCH_KEYWORD line at the end.
-- SEARCH_KEYWORD tells the backend what to search. Be specific — use the actual product type.
+- SEARCH_KEYWORD tells the backend what to search. Be specific.
 - For greetings/casual chat, do NOT output SEARCH_KEYWORD.
-- Never say you can't help with shopping queries — always extract a keyword.
-
-Store catalog:
-{CATALOG}
-
+Store catalog: {CATALOG}
 SEARCH_KEYWORD rules:
 - User wants lipstick → SEARCH_KEYWORD: lipstick
-- User wants something for dry skin → SEARCH_KEYWORD: moisturizer
-- User wants OPI brand → SEARCH_KEYWORD: OPI
 - User wants trending/popular → SEARCH_KEYWORD: TRENDING
 - User wants top rated → SEARCH_KEYWORD: TOP_RATED
 - User says hi/thanks/bye → no SEARCH_KEYWORD
+Format: always put SEARCH_KEYWORD: <word> on its own line at the very end."""
 
-Format: always put SEARCH_KEYWORD: <word> on its own line at the very end.
-"""
-
-
-# ── Fetch products by keyword ─────────────────────────────────
 def _fetch_products(keyword, logged_in):
-    """Run the recommendation engine based on keyword from Groq."""
     keyword = keyword.strip()
-
     if keyword == 'TRENDING':
         products = []
         for _, row in trending_products.head(6).iterrows():
-            products.append({
-                'name':   str(row.get('Name', 'Product')),
-                'brand':  str(row.get('Brand', 'N/A')),
-                'image':  _resolve_image(row.get('ImageURL', '')),
-                'rating': str(row.get('Rating', 'N/A')),
-                'price':  random.choice(price)
-            })
+            products.append({'name': str(row.get('Name','Product')), 'brand': str(row.get('Brand','N/A')),
+                             'image': _resolve_image(row.get('ImageURL','')),
+                             'rating': str(row.get('Rating','N/A')), 'price': random.choice(price)})
         return products
-
     if keyword == 'TOP_RATED':
-        recs = train_data.sort_values('Rating', ascending=False).head(6)
-        return _df_to_products(recs)
-
-    # Content-based search
+        return _df_to_products(train_data.sort_values('Rating', ascending=False).head(6))
     recs = content_based_recommendations(train_data, keyword, top_n=6)
-
-    # Add collab recs for logged-in users
     if logged_in and not recs.empty:
         collab = collaborative_filtering_recommendations(train_data, keyword, top_n=3)
         if not collab.empty:
             existing = set(recs['Name'].tolist())
             collab   = collab[~collab['Name'].isin(existing)]
             recs     = pd.concat([recs, collab]).head(8)
-
     if not recs.empty:
         return _df_to_products(recs)
-
-    # Fallback: try brand search
-    brand_results = train_data[
-        train_data['Brand'].astype(str).str.lower().str.contains(keyword.lower(), na=False)
-    ].head(6)
+    brand_results = train_data[train_data['Brand'].astype(str).str.lower().str.contains(keyword.lower(), na=False)].head(6)
     if not brand_results.empty:
         return _df_to_products(brand_results)
-
-    # Fallback: partial name match
-    name_results = train_data[
-        train_data['Name'].astype(str).str.lower().str.contains(keyword.lower(), na=False)
-    ].head(6)
+    name_results = train_data[train_data['Name'].astype(str).str.lower().str.contains(keyword.lower(), na=False)].head(6)
     if not name_results.empty:
         return _df_to_products(name_results)
-
     return []
 
 
 # ═══════════════════════════════════════════════════════════════
-#  CHAT ROUTE
+#  CHAT
 # ═══════════════════════════════════════════════════════════════
 @app.route('/chat', methods=['POST'])
 def chat():
-    data     = request.get_json()
+    data = request.get_json()
     user_msg = (data.get('message') or '').strip()
-
     if not user_msg:
-        return jsonify({'reply': 'Say something and I\'ll help! 🛍️', 'products': []})
-
+        return jsonify({'reply': "Say something and I'll help! 🛍️", 'products': []})
     username  = session.get('username', '')
     logged_in = session.get('logged_in', False)
-
-    # Maintain last 6 turns for context
     history = session.get('chat_history', [])
     history.append({"role": "user", "content": user_msg})
-    if len(history) > 6:
-        history = history[-6:]
-
-    products = []
-    reply    = ''
-
+    if len(history) > 6: history = history[-6:]
+    products = []; reply = ''
     try:
         system = SYSTEM_PROMPT
         if username:
             system += f"\n\nUser's name is {username}. Address them by name once when greeting."
-
         response = groq_client.chat.completions.create(
             model=GROQ_MODEL,
             messages=[{"role": "system", "content": system}] + history,
-            temperature=0.5,
-            max_tokens=250,
+            temperature=0.5, max_tokens=250,
         )
-
         full_text = response.choices[0].message.content.strip()
-        print(f"[Groq raw]: {full_text}")  # debug — visible in Flask console
-
-        # Extract SEARCH_KEYWORD if present
         search_keyword = None
         if 'SEARCH_KEYWORD:' in full_text:
-            parts          = full_text.split('SEARCH_KEYWORD:')
-            reply          = parts[0].strip()
+            parts = full_text.split('SEARCH_KEYWORD:')
+            reply = parts[0].strip()
             search_keyword = parts[1].strip().split('\n')[0].strip()
         else:
             reply = full_text
-
-        # Fetch products
         if search_keyword:
             products = _fetch_products(search_keyword, logged_in)
-            # If Groq gave a keyword but no products found, say so clearly
             if not products:
                 reply += f"\n\nCouldn't find exact matches for '{search_keyword}'. Try a different term!"
-
-        # Save history
         history.append({"role": "assistant", "content": full_text})
         session['chat_history'] = history[-6:]
         session.modified = True
-
     except Exception as e:
-        # Print the REAL error in console so you can debug
         print(f"[Groq ERROR]: {type(e).__name__}: {e}")
-        reply    = f"Error: {type(e).__name__} — {str(e)[:120]}"
+        reply = f"Error: {type(e).__name__} — {str(e)[:120]}"
         products = []
-
     return jsonify({'reply': reply, 'products': products})
 
 
 # ═══════════════════════════════════════════════════════════════
-#  CART ROUTES
+#  CART
 # ═══════════════════════════════════════════════════════════════
 @app.route('/add_to_cart', methods=['POST'])
 def add_to_cart():
-    data      = request.get_json()
-    name      = (data.get('name') or '').strip()
-    brand     = data.get('brand', 'N/A')
-    image     = data.get('image', '')
-    rating    = data.get('rating', 'N/A')
-    price_val = data.get('price', 50)
-
+    data = request.get_json()
+    name = (data.get('name') or '').strip()
     if not name:
         return jsonify({'success': False, 'message': 'Invalid product'}), 400
-
     cart = session.get('cart', [])
     for item in cart:
         if item['name'] == name:
             item['quantity'] += 1
             session['cart'] = cart; session.modified = True
-            return jsonify({'success': True,
-                            'cart_count': sum(i['quantity'] for i in cart),
-                            'message': 'Quantity updated!'})
-
-    cart.append({'name': name, 'brand': brand, 'image': image,
-                 'rating': rating, 'price': price_val, 'quantity': 1})
+            return jsonify({'success': True, 'cart_count': sum(i['quantity'] for i in cart), 'message': 'Quantity updated!'})
+    cart.append({'name': name, 'brand': data.get('brand','N/A'), 'image': data.get('image',''),
+                 'rating': data.get('rating','N/A'), 'price': data.get('price',50), 'quantity': 1})
     session['cart'] = cart; session.modified = True
-    return jsonify({'success': True,
-                    'cart_count': sum(i['quantity'] for i in cart),
-                    'message': f'"{truncate(name, 25)}" added to cart!'})
-
+    return jsonify({'success': True, 'cart_count': sum(i['quantity'] for i in cart),
+                    'message': f'"{truncate(name,25)}" added to cart!'})
 
 @app.route('/update_cart', methods=['POST'])
 def update_cart():
-    data   = request.get_json()
-    name   = data.get('name', '')
-    action = data.get('action', '')
-    cart   = session.get('cart', [])
+    data = request.get_json()
+    name = data.get('name',''); action = data.get('action','')
+    cart = session.get('cart', [])
     for item in cart:
         if item['name'] == name:
-            if action == 'increase':   item['quantity'] += 1
+            if action == 'increase': item['quantity'] += 1
             elif action == 'decrease':
                 item['quantity'] -= 1
                 if item['quantity'] <= 0: cart.remove(item)
             break
     session['cart'] = cart; session.modified = True
     total = sum(i['price'] * i['quantity'] for i in cart)
-    return jsonify({'success': True,
-                    'cart_count': sum(i['quantity'] for i in cart),
-                    'total': round(total, 2)})
-
+    return jsonify({'success': True, 'cart_count': sum(i['quantity'] for i in cart), 'total': round(total, 2)})
 
 @app.route('/remove_from_cart', methods=['POST'])
 def remove_from_cart():
     data = request.get_json()
-    cart = [i for i in session.get('cart', []) if i['name'] != data.get('name', '')]
+    cart = [i for i in session.get('cart', []) if i['name'] != data.get('name','')]
     session['cart'] = cart; session.modified = True
     total = sum(i['price'] * i['quantity'] for i in cart)
-    return jsonify({'success': True,
-                    'cart_count': sum(i['quantity'] for i in cart),
-                    'total': round(total, 2)})
-
+    return jsonify({'success': True, 'cart_count': sum(i['quantity'] for i in cart), 'total': round(total, 2)})
 
 @app.route('/cart')
 def cart_page():
     cart  = session.get('cart', [])
     total = sum(i['price'] * i['quantity'] for i in cart)
-    return render_template('cart.html', cart=cart, total=round(total, 2), **session_vars())
+    return render_template('cart.html', total=round(total, 2), **session_vars())
+
+# ═══════════════════════════════════════════════════════════════
+#  SAVE ORDER
+# ═══════════════════════════════════════════════════════════════
+@app.route('/save_order', methods=['POST'])
+def save_order():
+    username = session.get('username', 'guest') if session.get('logged_in') else 'guest'
+    data     = request.get_json()
+    cart     = session.get('cart', [])
+    if not cart:
+        return jsonify({'success': False, 'message': 'Cart is empty'})
+    try:
+        order = Order(
+            username         = username,
+            order_id         = data.get('order_id', 'ORD000000'),
+            items            = json.dumps(cart),
+            total            = float(data.get('total', 0)),
+            payment_method   = data.get('payment_method', 'Unknown'),
+            delivery_name    = data.get('delivery_name', ''),
+            delivery_address = data.get('delivery_address', ''),
+        )
+        db.session.add(order)
+        db.session.commit()
+        session['cart'] = []
+        session.modified = True
+        return jsonify({'success': True, 'order_id': order.order_id})
+    except Exception as e:
+        print(f"[save_order ERROR]: {e}")
+        return jsonify({'success': False, 'message': str(e)})
+
+
+# ═══════════════════════════════════════════════════════════════
+#  ORDER HISTORY
+# ═══════════════════════════════════════════════════════════════
+@app.route('/orders')
+def order_history():
+    if not session.get('logged_in'):
+        return redirect(url_for('index'))
+    username = session.get('username')
+    orders   = Order.query.filter_by(username=username)\
+                          .order_by(Order.placed_at.desc()).all()
+    return render_template('order_history.html', orders=orders, **session_vars())
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -436,34 +399,23 @@ def cart_page():
 def _imgs():
     return [random_image_urls[i % len(random_image_urls)] for i in range(len(trending_products))]
 
-
 @app.route("/")
 def index():
-    return render_template('index.html',
-                           trending_products=trending_products.head(8),
-                           truncate=truncate,
-                           random_product_image_urls=_imgs(),
-                           random_price=random.choice(price),
-                           **session_vars())
-
+    return render_template('index.html', trending_products=trending_products.head(8),
+                           truncate=truncate, random_product_image_urls=_imgs(),
+                           random_price=random.choice(price), **session_vars())
 
 @app.route("/main")
 def main():
-    return render_template('main.html',
-                           content_based_rec=pd.DataFrame(),
-                           collab_rec=pd.DataFrame(),
-                           **session_vars())
-
+    return render_template('main.html', content_based_rec=pd.DataFrame(),
+                           collab_rec=pd.DataFrame(), truncate=truncate,
+                           random_price=random.choice(price), **session_vars())
 
 @app.route("/index")
 def indexredirect():
-    return render_template('index.html',
-                           trending_products=trending_products.head(8),
-                           truncate=truncate,
-                           random_product_image_urls=_imgs(),
-                           random_price=random.choice(price),
-                           **session_vars())
-
+    return render_template('index.html', trending_products=trending_products.head(8),
+                           truncate=truncate, random_product_image_urls=_imgs(),
+                           random_price=random.choice(price), **session_vars())
 
 @app.route("/signup", methods=['POST', 'GET'])
 def signup():
@@ -472,24 +424,19 @@ def signup():
         email    = request.form['email']
         password = request.form['password']
         if Signup.query.filter_by(username=username).first():
-            return render_template('index.html',
-                                   trending_products=trending_products.head(8),
-                                   truncate=truncate,
-                                   random_product_image_urls=_imgs(),
+            return render_template('index.html', trending_products=trending_products.head(8),
+                                   truncate=truncate, random_product_image_urls=_imgs(),
                                    random_price=random.choice(price),
                                    signup_message='Username already exists! Please Sign In.',
                                    signup_error=True, open_signin=True, **session_vars())
         db.session.add(Signup(username=username, email=email, password=password))
         db.session.commit()
-        return render_template('index.html',
-                               trending_products=trending_products.head(8),
-                               truncate=truncate,
-                               random_product_image_urls=_imgs(),
+        return render_template('index.html', trending_products=trending_products.head(8),
+                               truncate=truncate, random_product_image_urls=_imgs(),
                                random_price=random.choice(price),
                                signup_message='Account created! Please Sign In.',
                                open_signin=True, **session_vars())
     return redirect(url_for('index'))
-
 
 @app.route('/signin', methods=['POST', 'GET'])
 def signin():
@@ -500,31 +447,25 @@ def signin():
         if user:
             session['logged_in'] = True
             session['username']  = username
-            return render_template('index.html',
-                                   trending_products=trending_products.head(8),
-                                   truncate=truncate,
-                                   random_product_image_urls=_imgs(),
+            cart = session.get('cart', [])
+            return render_template('index.html', trending_products=trending_products.head(8),
+                                   truncate=truncate, random_product_image_urls=_imgs(),
                                    random_price=random.choice(price),
                                    signup_message=f'Welcome back, {username}!',
                                    logged_in=True, username=username,
-                                   cart_count=sum(i['quantity'] for i in session.get('cart', [])))
+                                   cart_count=sum(i['quantity'] for i in cart), cart=cart)
         user_exists = Signup.query.filter_by(username=username).first()
         msg = 'Account not found! Please Sign Up.' if not user_exists else 'Incorrect password!'
-        return render_template('index.html',
-                               trending_products=trending_products.head(8),
-                               truncate=truncate,
-                               random_product_image_urls=_imgs(),
-                               random_price=random.choice(price),
-                               signup_message=msg,
+        return render_template('index.html', trending_products=trending_products.head(8),
+                               truncate=truncate, random_product_image_urls=_imgs(),
+                               random_price=random.choice(price), signup_message=msg,
                                signin_error=True, open_signin=True, **session_vars())
     return redirect(url_for('index'))
-
 
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect(url_for('index'))
-
 
 @app.route("/recommendations", methods=['POST', 'GET'])
 def recommendations():
@@ -532,40 +473,33 @@ def recommendations():
         prod = (request.form.get('prod') or '').strip()
         if not prod:
             return render_template('main.html', message="Please enter a product name.",
-                                   content_based_rec=pd.DataFrame(),
-                                   collab_rec=pd.DataFrame(), **session_vars())
-
+                                   content_based_rec=pd.DataFrame(), collab_rec=pd.DataFrame(),
+                                   truncate=truncate, random_price=random.choice(price), **session_vars())
         content_based_rec = content_based_recommendations(train_data, prod, top_n=6)
         collab_rec        = pd.DataFrame()
-
         if session.get('logged_in'):
             collab_rec = collaborative_filtering_recommendations(train_data, prod, top_n=4)
             if not content_based_rec.empty and not collab_rec.empty:
                 content_names = set(content_based_rec['Name'].tolist())
                 collab_rec    = collab_rec[~collab_rec['Name'].isin(content_names)]
-
         if content_based_rec.empty:
-            return render_template('main.html',
-                                   message=f"No results for '{prod}'. Try another keyword.",
-                                   content_based_rec=pd.DataFrame(),
-                                   collab_rec=pd.DataFrame(), **session_vars())
-
-        return render_template('main.html',
-                               content_based_rec=content_based_rec,
-                               collab_rec=collab_rec,
-                               truncate=truncate,
-                               random_price=random.choice(price),
-                               **session_vars())
-
-    return render_template('main.html',
-                           content_based_rec=pd.DataFrame(),
-                           collab_rec=pd.DataFrame(), **session_vars())
+            return render_template('main.html', message=f"No results for '{prod}'. Try another keyword.",
+                                   content_based_rec=pd.DataFrame(), collab_rec=pd.DataFrame(),
+                                   truncate=truncate, random_price=random.choice(price), **session_vars())
+        return render_template('main.html', content_based_rec=content_based_rec, collab_rec=collab_rec,
+                               truncate=truncate, random_price=random.choice(price), **session_vars())
+    return render_template('main.html', content_based_rec=pd.DataFrame(), collab_rec=pd.DataFrame(),
+                           truncate=truncate, random_price=random.choice(price), **session_vars())
 
 @app.route('/payment')
 def payment():
-    cart = session.get('cart', [])
+    # ✅ FIX: session_vars() already includes 'cart', so don't pass cart= separately
+    cart  = session.get('cart', [])
     total = sum(i['price'] * i['quantity'] for i in cart)
     return render_template('payment.html', total=int(total * 1.08), **session_vars())
 
+
 if __name__ == "__main__":
+    with app.app_context():
+        db.create_all()
     app.run(debug=True)
