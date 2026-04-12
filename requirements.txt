@@ -1,0 +1,8 @@
+flask
+flask-sqlalchemy
+scikit-learn
+pandas
+numpy
+groq
+python-dotenv
+gunicorn
