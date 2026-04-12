@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Orders — Ecommerce</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        @keyframes shine {
+            0%   { background-position: 0% center; }
+            100% { background-position: 200% center; }
+        }
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(18px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes badgeBounce {
+            0%   { transform: scale(1); }
+            50%  { transform: scale(1.4); }
+            100% { transform: scale(1); }
+        }
+
+        body {
+            background: #f8f9fa;
+            font-family: 'DM Sans', sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .main-content { flex: 1; }
+
+        /* ── Navbar (matches index.html exactly) ── */
+        .navbar { box-shadow: 0px 4px 8px rgba(0,0,0,0.1); background: #f8f9fa !important; }
+        .navbar-brand {
+            font-family: 'Playfair Display', serif;
+            font-weight: 700; font-size: 1.4rem; letter-spacing: 0.5px;
+            background: linear-gradient(90deg, #f5a623, #ff6b6b, #f5a623);
+            background-size: 200% auto;
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text; animation: shine 3s linear infinite;
+        }
+        .cart-nav-link {
+            position: relative; display: flex; align-items: center;
+            padding: 5px 14px !important; color: #333 !important; font-weight: 600; transition: color 0.2s;
+        }
+        .cart-nav-link:hover { color: #f5a623 !important; }
+        .cart-badge {
+            position: absolute; top: -4px; right: 4px;
+            background: #ee5a24; color: #fff; font-size: 0.65rem; font-weight: 700;
+            min-width: 18px; height: 18px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center; padding: 0 4px; line-height: 1;
+        }
+        .btn-logout {
+            border: 2px solid #ee5a24; color: #ee5a24 !important; background: transparent;
+            border-radius: 20px; padding: 5px 18px; font-weight: 600; transition: all 0.3s ease;
+        }
+        .btn-logout:hover { background: #ee5a24; color: #fff !important; box-shadow: 0 4px 15px rgba(238,90,36,0.4); transform: translateY(-2px); }
+        .welcome-badge {
+            background: linear-gradient(135deg, #f5a623, #ee5a24);
+            color: #fff; font-size: 0.8rem; font-weight: 600; padding: 4px 12px; border-radius: 20px;
+        }
+        .orders-nav-link { color: #333 !important; font-weight: 600; transition: color 0.2s; }
+        .orders-nav-link:hover, .orders-nav-link.active { color: #f5a623 !important; }
+
+        /* ── Page Header ── */
+        .page-header {
+            background: linear-gradient(135deg, #f5a623, #ee5a24);
+            color: #fff;
+            padding: 36px 0 28px;
+            margin-bottom: 32px;
+        }
+        .page-header h2 {
+            font-family: 'Playfair Display', serif;
+            font-weight: 700; font-size: 1.9rem; margin-bottom: 4px;
+        }
+        .page-header p { font-size: 0.88rem; color: rgba(255,255,255,0.85); margin: 0; }
+        .page-header .order-count-badge {
+            background: rgba(255,255,255,0.2);
+            border-radius: 20px; padding: 4px 14px;
+            font-size: 0.82rem; font-weight: 600;
+            display: inline-block; margin-top: 8px;
+        }
+
+        /* ── Order Card ── */
+        .order-card {
+            background: #fff;
+            border-radius: 14px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            margin-bottom: 22px;
+            overflow: hidden;
+            animation: fadeUp 0.35s ease both;
+            border: 1px solid #f0f0f0;
+            transition: box-shadow 0.2s, transform 0.2s;
+        }
+        .order-card:hover {
+            box-shadow: 0 8px 28px rgba(245,166,35,0.18);
+            transform: translateY(-2px);
+        }
+
+        /* Card Header */
+        .order-card-header {
+            background: #fafafa;
+            border-bottom: 1px solid #f0f0f0;
+            padding: 14px 20px;
+            display: flex; align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap; gap: 10px;
+        }
+        .order-id {
+            font-family: 'Playfair Display', serif;
+            font-weight: 700; font-size: 0.95rem; color: #1a1a1a;
+        }
+        .order-id span { color: #ee5a24; }
+        .order-date { font-size: 0.78rem; color: #999; margin-top: 2px; }
+        .order-date i { color: #f5a623; margin-right: 4px; }
+        .order-status {
+            background: linear-gradient(135deg, #f5a623, #ee5a24);
+            color: #fff;
+            font-size: 0.74rem; font-weight: 700;
+            padding: 4px 14px; border-radius: 20px;
+            display: flex; align-items: center; gap: 5px;
+        }
+        .order-status::before {
+            content: ''; width: 7px; height: 7px;
+            background: rgba(255,255,255,0.8); border-radius: 50%;
+        }
+
+        /* Meta row */
+        .order-meta {
+            padding: 12px 20px;
+            display: flex; gap: 28px; flex-wrap: wrap;
+            border-bottom: 1px solid #f5f5f5;
+        }
+        .order-meta-item { font-size: 0.8rem; color: #555; }
+        .order-meta-item strong { color: #1a1a1a; display: block; font-size: 0.82rem; margin-bottom: 1px; }
+        .order-meta-item i { color: #f5a623; margin-right: 4px; }
+
+        /* Items strip */
+        .order-items {
+            padding: 16px 20px;
+            display: flex; gap: 14px;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        .order-items::-webkit-scrollbar { height: 4px; }
+        .order-items::-webkit-scrollbar-thumb { background: #f5a623; border-radius: 4px; }
+
+        .order-item-chip {
+            display: flex; align-items: center; gap: 10px;
+            background: #f8f9fa; border: 1px solid #eee;
+            border-radius: 10px; padding: 8px 12px;
+            min-width: 200px; flex-shrink: 0;
+            transition: border-color 0.2s;
+        }
+        .order-item-chip:hover { border-color: #f5a623; }
+        .order-item-img {
+            width: 48px; height: 48px;
+            border-radius: 7px; object-fit: cover;
+            border: 1px solid #eee; flex-shrink: 0;
+            background: #f0f0f0;
+        }
+        .order-item-name {
+            font-family: 'Playfair Display', serif;
+            font-size: 0.8rem; font-weight: 700; color: #1a1a1a;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px;
+        }
+        .order-item-brand { font-size: 0.7rem; color: #aaa; }
+        .order-item-price { font-size: 0.8rem; font-weight: 700; color: #ee5a24; margin-top: 2px; }
+        .order-item-qty {
+            font-size: 0.68rem; color: #fff;
+            background: linear-gradient(135deg, #f5a623, #ee5a24);
+            border-radius: 10px; padding: 2px 8px; font-weight: 700; white-space: nowrap;
+        }
+
+        /* Card Footer */
+        .order-card-footer {
+            padding: 12px 20px;
+            background: #fafafa;
+            border-top: 1px solid #f0f0f0;
+            display: flex; align-items: center;
+            justify-content: space-between; flex-wrap: wrap; gap: 8px;
+        }
+        .order-total { font-size: 1rem; font-weight: 700; color: #1a1a1a; }
+        .order-total span { color: #ee5a24; font-size: 1.1rem; }
+        .order-method {
+            font-size: 0.78rem; color: #777;
+            display: flex; align-items: center; gap: 5px;
+        }
+        .order-method i { color: #f5a623; }
+
+        /* Empty state */
+        .empty-orders {
+            text-align: center; padding: 80px 20px;
+            background: #fff; border-radius: 14px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+        }
+        .empty-orders i { font-size: 5rem; color: #f5a623; opacity: 0.3; margin-bottom: 20px; }
+        .empty-orders h4 { font-family: 'Playfair Display', serif; color: #555; margin-bottom: 10px; }
+        .empty-orders p { color: #999; margin-bottom: 24px; }
+        .btn-shop {
+            background: linear-gradient(135deg, #f5a623, #ee5a24);
+            color: #fff; border: none; border-radius: 20px;
+            padding: 10px 36px; font-weight: 700; font-size: 0.95rem;
+            text-decoration: none; display: inline-block; transition: all 0.2s;
+        }
+        .btn-shop:hover {
+            color: #fff; text-decoration: none;
+            box-shadow: 0 4px 16px rgba(238,90,36,0.4); transform: translateY(-2px);
+        }
+
+        /* Footer */
+        footer { background: #1a1a2e !important; border-top: 2px solid #f5a623; }
+        footer p { color: #b0b0b0 !important; }
+    </style>
+</head>
+<body>
+
+<!-- Navbar (matches index.html style exactly) -->
+<nav class="navbar navbar-expand-lg navbar-light bg-light">
+  <a class="navbar-brand mx-auto" href="/">Ecommerce Recommendation System</a>
+  <div class="collapse navbar-collapse justify-content-end" id="navbarNav">
+    <ul class="navbar-nav align-items-center">
+      <li class="nav-item">
+        <a class="nav-link orders-nav-link active" href="/orders">
+          <i class="fas fa-box-open"></i> My Orders
+        </a>
+      </li>
+      <li class="nav-item">
+        <a class="nav-link cart-nav-link" href="/cart">
+          <i class="fas fa-shopping-cart" style="font-size:1.2rem;"></i>
+          <span class="cart-badge" id="cart-badge-count">{{ cart_count }}</span>
+        </a>
+      </li>
+      {% if logged_in %}
+        <li class="nav-item mr-2"><span class="welcome-badge">{{ username }}</span></li>
+
+      {% endif %}
+
+    </ul>
+  </div>
+</nav>
+
+<!-- Page Header -->
+<div class="page-header">
+  <div class="container">
+    <h2><i class="fas fa-box-open" style="margin-right:10px;opacity:0.9;"></i>My Orders</h2>
+    <p>Track all your past purchases in one place</p>
+    <div class="order-count-badge">
+      {{ orders|length }} order{{ 's' if orders|length != 1 else '' }} placed
+    </div>
+  </div>
+</div>
+
+<div class="main-content">
+  <div class="container pb-5">
+
+    {% if orders %}
+      {% for order in orders %}
+      <div class="order-card" style="animation-delay: {{ loop.index0 * 0.07 }}s;">
+
+        <!-- Card Header -->
+        <div class="order-card-header">
+          <div>
+            <div class="order-id">Order <span>#{{ order.order_id }}</span></div>
+            <div class="order-date">
+              <i class="fas fa-calendar-alt"></i>
+              {{ order.placed_at.strftime('%d %b %Y') }}
+            </div>
+          </div>
+          <div class="order-status">Delivered</div>
+        </div>
+
+        <!-- Meta -->
+        <div class="order-meta">
+          <div class="order-meta-item">
+            <i class="fas fa-user"></i>
+            <strong>{{ order.delivery_name }}</strong>
+            Delivery Name
+          </div>
+          <div class="order-meta-item">
+            <i class="fas fa-map-marker-alt"></i>
+            <strong style="max-width:220px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              {{ order.delivery_address }}
+            </strong>
+            Delivery Address
+          </div>
+
+          <div class="order-meta-item">
+            <i class="fas fa-box"></i>
+            <strong>{{ order.items_list()|length }} item{{ 's' if order.items_list()|length != 1 else '' }}</strong>
+            Items Ordered
+          </div>
+        </div>
+
+        <!-- Items strip -->
+        <div class="order-items">
+          {% for item in order.items_list() %}
+          <div class="order-item-chip">
+            <img src="{{ item.get('image','') }}"
+                 class="order-item-img"
+                 alt="{{ item.get('name','Product') }}"
+                 onerror="this.src='static/img/img_1.png'">
+            <div style="min-width:0;">
+              <div class="order-item-name" title="{{ item.get('name','') }}">
+                {{ item.get('name','Product')[:22] }}{% if item.get('name','')|length > 22 %}…{% endif %}
+              </div>
+              <div class="order-item-brand">{{ item.get('brand','N/A') }}</div>
+              <div class="order-item-price">${{ item.get('price', 0) }}</div>
+            </div>
+            <div class="order-item-qty">×{{ item.get('quantity',1) }}</div>
+          </div>
+          {% endfor %}
+        </div>
+
+        <!-- Footer -->
+        <div class="order-card-footer">
+          <div class="order-total">
+            Total Paid: <span>₹{{ "%.0f"|format(order.total) }}</span>
+          </div>
+          <div class="order-method">
+            <i class="fas fa-shield-alt"></i>
+            {{ order.payment_method }}
+          </div>
+        </div>
+
+      </div>
+      {% endfor %}
+
+    {% else %}
+    <div class="empty-orders">
+      <i class="fas fa-box-open"></i>
+      <h4>No orders yet</h4>
+      <p>You haven't placed any orders. Start shopping and your orders will appear here!</p>
+      <a href="/main" class="btn-shop">Start Shopping</a>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+
+<!-- Footer -->
+<footer class="footer bg-dark text-white">
+  <div class="container" style="padding:16px 0;">
+    <p class="text-center mb-0" style="font-size:0.85rem;">
+      © Ecommerce Recommendation System. All Rights Reserved.
+    </p>
+  </div>
+</footer>
+
+<script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
