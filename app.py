@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import random
 import json
+import re
 from datetime import datetime
 from flask_sqlalchemy import SQLAlchemy
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -18,12 +19,9 @@ groq_client  = Groq(api_key=GROQ_API_KEY)
 
 app = Flask(__name__)
 
-# ── Secret key MUST be set immediately after app creation ─────
 app.secret_key = os.getenv("SECRET_KEY", "alskdjfwoeieiurlskdjfslkdjf")
 
-# ── Database (SQLite — no XAMPP needed) ───────────────────────
 app.config['SQLALCHEMY_DATABASE_URI'] = "sqlite:///ecom.db"
-
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -109,7 +107,6 @@ def _df_to_products(df, limit=6):
     return result
 
 def session_vars():
-    """Returns logged_in, username, cart_count, cart — used in every render_template call."""
     cart = session.get('cart', [])
     return {
         'logged_in':  session.get('logged_in', False),
@@ -214,98 +211,225 @@ def _build_catalog():
         return "Beauty and cosmetics ecommerce store."
 
 CATALOG = _build_catalog()
+
 SYSTEM_PROMPT = f"""You are ShopBot, a smart shopping assistant for a beauty and cosmetics store.
 Rules:
 - Be warm, brief and helpful. Max 2 sentences for your reply text.
 - When the user wants products, you MUST output a SEARCH_KEYWORD line at the end.
-- SEARCH_KEYWORD tells the backend what to search. Be specific.
+- SEARCH_KEYWORD tells the backend what to search. Be specific. Use ONE or TWO words only.
 - For greetings/casual chat, do NOT output SEARCH_KEYWORD.
 Store catalog: {CATALOG}
 SEARCH_KEYWORD rules:
-- User wants lipstick → SEARCH_KEYWORD: lipstick
-- User wants trending/popular → SEARCH_KEYWORD: TRENDING
-- User wants top rated → SEARCH_KEYWORD: TOP_RATED
-- User says hi/thanks/bye → no SEARCH_KEYWORD
+- User wants lipstick           → SEARCH_KEYWORD: lipstick
+- User wants trending/popular   → SEARCH_KEYWORD: TRENDING
+- User wants top rated          → SEARCH_KEYWORD: TOP_RATED
+- User has oily skin            → SEARCH_KEYWORD: moisturizer
+- User has acne / pimples       → SEARCH_KEYWORD: salicylic
+- User has dandruff             → SEARCH_KEYWORD: anti dandruff
+- User wants anti aging         → SEARCH_KEYWORD: retinol
+- User wants glow / brightening → SEARCH_KEYWORD: vitamin c
+- User says hi/thanks/bye       → no SEARCH_KEYWORD
+IMPORTANT: SEARCH_KEYWORD must be a real product name or ingredient — NOT a sentence or price range.
 Format: always put SEARCH_KEYWORD: <word> on its own line at the very end."""
 
+
+# ── Skin / hair / concern → searchable keyword map ────────────
+CONCERN_MAP = {
+    'oily skin':        'moisturizer',
+    'oily':             'oil control',
+    'dry skin':         'moisturizer',
+    'dry':              'moisturizer',
+    'sensitive skin':   'sensitive',
+    'sensitive':        'gentle',
+    'combination skin': 'moisturizer',
+    'normal skin':      'moisturizer',
+    'acne':             'salicylic',
+    'pimple':           'salicylic',
+    'pimples':          'salicylic',
+    'dark spot':        'serum',
+    'dark spots':       'brightening',
+    'blackhead':        'charcoal',
+    'blackheads':       'pore',
+    'wrinkle':          'retinol',
+    'wrinkles':         'retinol',
+    'anti aging':       'retinol',
+    'anti-aging':       'retinol',
+    'brightening':      'vitamin c',
+    'glow':             'serum',
+    'glowing skin':     'serum',
+    'dull skin':        'exfoliating',
+    'pigmentation':     'vitamin c',
+    'redness':          'calming',
+    'sunburn':          'aloe',
+    'tan':              'sunscreen',
+    'sun protection':   'sunscreen',
+    'spf':              'sunscreen',
+    'hair loss':        'biotin',
+    'hair fall':        'hair growth',
+    'dandruff':         'anti dandruff',
+    'frizzy hair':      'smoothing',
+    'frizzy':           'smoothing',
+    'curly hair':       'curl',
+    'dry hair':         'conditioner',
+    'oily hair':        'shampoo',
+    'damaged hair':     'repair',
+    'body odor':        'deodorant',
+    'rough skin':       'body lotion',
+    'cracked heels':    'foot cream',
+}
+
+# ── Strip filler words and prices from Groq keyword ───────────
+_STRIP_WORDS = re.compile(
+    r'\b(products?|items?|brands?|under|below|less than|up to|upto|'
+    r'cheaper than|above|over|more than|for|with|and|or|the|a|an|'
+    r'good|best|top|great|nice|cheap|affordable|budget|premium|'
+    r'recommend|suggest|find|show|give|get)\b',
+    re.IGNORECASE
+)
+_PRICE_RE = re.compile(r'\$?\d+', re.IGNORECASE)
+
+
+def _clean_keyword(raw):
+    """
+    Translate Groq keyword to something the engine can find.
+    e.g. 'oil control products under 50' → 'oil control'
+         'oily skin moisturizer'          → 'moisturizer'
+         'acne prone skin'                → 'salicylic'
+    """
+    kw = raw.strip().lower()
+
+    # 1. Map skin/hair concerns first
+    for concern, mapped in CONCERN_MAP.items():
+        if concern in kw:
+            return mapped
+
+    # 2. Strip price amounts
+    kw = _PRICE_RE.sub('', kw)
+
+    # 3. Strip filler words
+    kw = _STRIP_WORDS.sub(' ', kw)
+
+    # 4. Collapse whitespace
+    kw = ' '.join(kw.split()).strip()
+
+    return kw if kw else raw.strip()
+
+
+# ── Product fetcher with 5-step fallback chain ────────────────
 def _fetch_products(keyword, logged_in):
-    keyword = keyword.strip()
-    if keyword == 'TRENDING':
-        products = []
+    raw_keyword = keyword.strip()
+    clean_kw    = _clean_keyword(raw_keyword)
+
+    # Special keywords
+    if raw_keyword.upper() == 'TRENDING':
+        result = []
         for _, row in trending_products.head(6).iterrows():
-            products.append({'name': str(row.get('Name','Product')), 'brand': str(row.get('Brand','N/A')),
-                             'image': _resolve_image(row.get('ImageURL','')),
-                             'rating': str(row.get('Rating','N/A')), 'price': random.choice(price)})
-        return products
-    if keyword == 'TOP_RATED':
+            result.append({
+                'name':   str(row.get('Name',  'Product')),
+                'brand':  str(row.get('Brand', 'N/A')),
+                'image':  _resolve_image(row.get('ImageURL', '')),
+                'rating': str(row.get('Rating', 'N/A')),
+                'price':  random.choice(price)
+            })
+        return result
+
+    if raw_keyword.upper() == 'TOP_RATED':
         return _df_to_products(train_data.sort_values('Rating', ascending=False).head(6))
-    recs = content_based_recommendations(train_data, keyword, top_n=6)
+
+    # Step 1: content-based on cleaned keyword
+    recs = content_based_recommendations(train_data, clean_kw, top_n=6)
+
+    # Step 2: blend collab for logged-in users
     if logged_in and not recs.empty:
-        collab = collaborative_filtering_recommendations(train_data, keyword, top_n=3)
+        collab = collaborative_filtering_recommendations(train_data, clean_kw, top_n=3)
         if not collab.empty:
             existing = set(recs['Name'].tolist())
             collab   = collab[~collab['Name'].isin(existing)]
             recs     = pd.concat([recs, collab]).head(8)
+
     if not recs.empty:
         return _df_to_products(recs)
-    brand_results = train_data[train_data['Brand'].astype(str).str.lower().str.contains(keyword.lower(), na=False)].head(6)
+
+    # Step 3: brand search
+    brand_results = train_data[
+        train_data['Brand'].astype(str).str.lower()
+        .str.contains(clean_kw.lower(), na=False)
+    ].head(6)
     if not brand_results.empty:
         return _df_to_products(brand_results)
-    name_results = train_data[train_data['Name'].astype(str).str.lower().str.contains(keyword.lower(), na=False)].head(6)
+
+    # Step 4: partial name search
+    name_results = train_data[
+        train_data['Name'].astype(str).str.lower()
+        .str.contains(clean_kw.lower(), na=False)
+    ].head(6)
     if not name_results.empty:
         return _df_to_products(name_results)
-    return []
+
+    # Step 5: graceful fallback — top rated (never return empty)
+    return _df_to_products(train_data.sort_values('Rating', ascending=False).head(6))
 
 
 # ═══════════════════════════════════════════════════════════════
-#  CHAT
+#  CHAT ROUTE
 # ═══════════════════════════════════════════════════════════════
 @app.route('/chat', methods=['POST'])
 def chat():
-    data = request.get_json()
+    data     = request.get_json()
     user_msg = (data.get('message') or '').strip()
     if not user_msg:
         return jsonify({'reply': "Say something and I'll help! 🛍️", 'products': []})
+
     username  = session.get('username', '')
     logged_in = session.get('logged_in', False)
+
     history = session.get('chat_history', [])
     history.append({"role": "user", "content": user_msg})
     if len(history) > 6:
         history = history[-6:]
-    products = []; reply = ''
+
+    products = []
+    reply    = ''
+
     try:
         system = SYSTEM_PROMPT
         if username:
             system += f"\n\nUser's name is {username}. Address them by name once when greeting."
+
         response = groq_client.chat.completions.create(
             model=GROQ_MODEL,
             messages=[{"role": "system", "content": system}] + history,
-            temperature=0.5, max_tokens=250,
+            temperature=0.4,
+            max_tokens=200,
         )
         full_text = response.choices[0].message.content.strip()
+
         search_keyword = None
         if 'SEARCH_KEYWORD:' in full_text:
-            parts = full_text.split('SEARCH_KEYWORD:')
-            reply = parts[0].strip()
+            parts          = full_text.split('SEARCH_KEYWORD:')
+            reply          = parts[0].strip()
             search_keyword = parts[1].strip().split('\n')[0].strip()
         else:
             reply = full_text
+
         if search_keyword:
             products = _fetch_products(search_keyword, logged_in)
-            if not products:
-                reply += f"\n\nCouldn't find exact matches for '{search_keyword}'. Try a different term!"
+            # ✅ No "Couldn't find..." — fallback chain always returns products
+
         history.append({"role": "assistant", "content": full_text})
         session['chat_history'] = history[-6:]
         session.modified = True
+
     except Exception as e:
         print(f"[Groq ERROR]: {type(e).__name__}: {e}")
-        reply = f"Error: {type(e).__name__} — {str(e)[:120]}"
+        reply    = "Something went wrong. Please try again! 😊"
         products = []
+
     return jsonify({'reply': reply, 'products': products})
 
 
 # ═══════════════════════════════════════════════════════════════
-#  CART
+#  CART ROUTES
 # ═══════════════════════════════════════════════════════════════
 @app.route('/add_to_cart', methods=['POST'])
 def add_to_cart():
@@ -329,6 +453,7 @@ def add_to_cart():
                     'cart_count': sum(i['quantity'] for i in cart),
                     'message': f'"{truncate(name, 25)}" added to cart!'})
 
+
 @app.route('/update_cart', methods=['POST'])
 def update_cart():
     data = request.get_json()
@@ -349,6 +474,7 @@ def update_cart():
                     'cart_count': sum(i['quantity'] for i in cart),
                     'total': round(total, 2)})
 
+
 @app.route('/remove_from_cart', methods=['POST'])
 def remove_from_cart():
     data = request.get_json()
@@ -359,9 +485,9 @@ def remove_from_cart():
                     'cart_count': sum(i['quantity'] for i in cart),
                     'total': round(total, 2)})
 
+
 @app.route('/cart')
 def cart_page():
-    # ✅ session_vars() already includes 'cart' — no duplicate kwarg
     cart  = session.get('cart', [])
     total = sum(i['price'] * i['quantity'] for i in cart)
     return render_template('cart.html', total=round(total, 2), **session_vars())
@@ -416,6 +542,7 @@ def order_history():
 def _imgs():
     return [random_image_urls[i % len(random_image_urls)] for i in range(len(trending_products))]
 
+
 @app.route("/")
 def index():
     return render_template('index.html',
@@ -424,6 +551,7 @@ def index():
                            random_product_image_urls=_imgs(),
                            random_price=random.choice(price),
                            **session_vars())
+
 
 @app.route("/main")
 def main():
@@ -434,6 +562,7 @@ def main():
                            random_price=random.choice(price),
                            **session_vars())
 
+
 @app.route("/index")
 def indexredirect():
     return render_template('index.html',
@@ -442,6 +571,7 @@ def indexredirect():
                            random_product_image_urls=_imgs(),
                            random_price=random.choice(price),
                            **session_vars())
+
 
 @app.route("/signup", methods=['POST', 'GET'])
 def signup():
@@ -467,6 +597,7 @@ def signup():
                                signup_message='Account created! Please Sign In.',
                                open_signin=True, **session_vars())
     return redirect(url_for('index'))
+
 
 @app.route('/signin', methods=['POST', 'GET'])
 def signin():
@@ -498,10 +629,12 @@ def signin():
                                signin_error=True, open_signin=True, **session_vars())
     return redirect(url_for('index'))
 
+
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect(url_for('index'))
+
 
 @app.route("/recommendations", methods=['POST', 'GET'])
 def recommendations():
@@ -517,11 +650,15 @@ def recommendations():
                                    **session_vars())
         content_based_rec = content_based_recommendations(train_data, prod, top_n=6)
         collab_rec        = pd.DataFrame()
+
+        # ✅ Logged in → hybrid (content + collab)
+        # ✅ Guest     → content-based only
         if session.get('logged_in'):
             collab_rec = collaborative_filtering_recommendations(train_data, prod, top_n=4)
             if not content_based_rec.empty and not collab_rec.empty:
                 content_names = set(content_based_rec['Name'].tolist())
                 collab_rec    = collab_rec[~collab_rec['Name'].isin(content_names)]
+
         if content_based_rec.empty:
             return render_template('main.html',
                                    message=f"No results for '{prod}'. Try another keyword.",
@@ -543,9 +680,9 @@ def recommendations():
                            random_price=random.choice(price),
                            **session_vars())
 
+
 @app.route('/payment')
 def payment():
-    # ✅ session_vars() already includes 'cart' — no duplicate kwarg
     cart  = session.get('cart', [])
     total = sum(i['price'] * i['quantity'] for i in cart)
     return render_template('payment.html', total=int(total * 1.08), **session_vars())
@@ -553,5 +690,5 @@ def payment():
 
 if __name__ == "__main__":
     with app.app_context():
-        db.create_all()  # auto-creates ecom.db with all tables
+        db.create_all()
     app.run(debug=True)
