@@ -12,7 +12,7 @@ An intelligent full-stack e-commerce web application that provides personalized 
 
 ## Recommendation System
 This project uses a Hybrid Recommendation Engine combining:
- ### 60% Collaborative Filtering
- - Suggests products based on similar user's behaviour
- ### 40% Content-Based Filtering
- - Recommends items based on product features and user preferences
+ ### Collaborative Filtering
+ -   Suggests products based on similar user's behaviour
+ ### Content-Based Filtering
+ -   Recommends items based on product features and user preferences
