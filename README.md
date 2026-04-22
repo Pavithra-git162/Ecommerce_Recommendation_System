@@ -16,3 +16,27 @@ This project uses a Hybrid Recommendation Engine combining:
  -   Suggests products based on similar user's behaviour
  ### Content-Based Filtering
  -   Recommends items based on product features and user preferences
+
+## AI Chatbot   
+- Powered by Groq API (LLaMA 3.3 70B)
+- Understands user queries in natural language
+- Provides context-aware product suggestions
+- Enhances user interaction and experience
+
+## Tech Stack
+### Frontend
+- HTML
+- CSS
+- JavaScript
+### Backend
+- Python (Flask)
+### Database
+- SQLite 
+### Machine Learning
+- Scikit-learn
+### AI Integration
+- Groq API (LLaMA 3.3 70B)
+### Deployment
+- Render
+
+   
