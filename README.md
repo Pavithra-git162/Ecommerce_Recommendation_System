@@ -39,4 +39,32 @@ This project uses a Hybrid Recommendation Engine combining:
 ### Deployment
 - Render
 
+## Project Structure
+# Ecommerce_Recommendation_System/
+│
+├── static/           
+├── templates/        
+├── app.py            
+├── models/           
+└── requirements.txt  
+
+## Installation & Setup
+### Clone the repository
+- git clone https://github.com/Pavithra-git162/Ecommerce_Recommendation_System.git
+- cd Ecommerce_Recommendation_System
+ 
+### Install dependencies
+- pip install -r requirements.txt
+  
+### Run the application
+python app.py
+
+### Open in browser
+http://127.0.0.1:5000/
+
+  
+ 
+
+
+
    
