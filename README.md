@@ -40,7 +40,7 @@ This project uses a Hybrid Recommendation Engine combining:
 - Render
 
 ## Project Structure
-# Ecommerce_Recommendation_System/
+### Ecommerce_Recommendation_System/
 │
 ├── static/           
 ├── templates/        
@@ -61,6 +61,10 @@ python app.py
 
 ### Open in browser
 http://127.0.0.1:5000/
+
+## Future Enhancements
+- Integration of payment gateway
+- Advanced recommendation models using deep learning
 
   
  
